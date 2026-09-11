@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Frontend Dev Tool",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Inspect computed styles, typography, contrast ratios, and extract page elements.",
   "permissions": [
     "activeTab",
