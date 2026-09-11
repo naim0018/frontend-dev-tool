@@ -6,7 +6,10 @@ import {
   Pipette,
   Palette,
   Type,
-  Image
+  Image,
+  FileDown,
+  Camera,
+  Monitor
 } from "lucide-react";
 import "./index.css";
 
@@ -123,6 +126,50 @@ const Popup = () => {
             API
           </span>
         </button>
+
+        <div className="border-t border-slate-900 my-2 pt-2">
+          <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider mb-2">Screen Capture</div>
+          <div className="grid grid-cols-3 gap-2">
+            {/* Full Page Screenshot */}
+            <button
+              onClick={() => {
+                sendTabMessage("trigger-fullpage-screenshot");
+                window.close();
+              }}
+              className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-slate-900/40 border border-slate-850 hover:border-emerald-500/50 hover:bg-emerald-950/20 transition-all text-slate-300 cursor-pointer group"
+              title="Capture entire scrollable page"
+            >
+              <FileDown className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+              <span className="text-[9px] font-bold">Full Page</span>
+            </button>
+
+            {/* Viewport Screenshot */}
+            <button
+              onClick={() => {
+                sendTabMessage("trigger-viewport-screenshot");
+                window.close();
+              }}
+              className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-slate-900/40 border border-slate-850 hover:border-blue-500/50 hover:bg-blue-950/20 transition-all text-slate-300 cursor-pointer group"
+              title="Capture visible screen area"
+            >
+              <Monitor className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
+              <span className="text-[9px] font-bold">Viewport</span>
+            </button>
+
+            {/* Area Screenshot */}
+            <button
+              onClick={() => {
+                sendTabMessage("trigger-area-screenshot");
+                window.close();
+              }}
+              className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-slate-900/40 border border-slate-850 hover:border-purple-500/50 hover:bg-purple-950/20 transition-all text-slate-300 cursor-pointer group"
+              title="Drag to select region"
+            >
+              <Camera className="w-4 h-4 text-purple-400 group-hover:scale-110 transition-transform" />
+              <span className="text-[9px] font-bold">Area</span>
+            </button>
+          </div>
+        </div>
 
         <div className="border-t border-slate-900 my-2 pt-2">
           <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider mb-2">Page Analyzers</div>

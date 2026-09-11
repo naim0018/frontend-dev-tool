@@ -644,6 +644,16 @@ export const InspectorOverlay: React.FC<InspectorOverlayProps> = ({
                       />
                     </div>
                   </div>
+                  <div>
+                    <div style={{ color: "#64748B", fontSize: "8px", letterSpacing: "0.5px", marginBottom: "2px" }}>TRACKING</div>
+                    <div style={{ color: "#F1F5F9", fontSize: "11px", fontWeight: "500", fontFamily: "monospace" }}>
+                      <CopyableValue 
+                        value={styles.letterSpacing} 
+                        label="Tracking / Letter Spacing" 
+                        interactive={interactive} 
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 

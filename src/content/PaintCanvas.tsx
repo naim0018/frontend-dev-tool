@@ -19,7 +19,10 @@ import {
   Download,
   Copy,
   Triangle,
-  GripHorizontal
+  GripHorizontal,
+  FileDown,
+  FileText,
+  Loader2
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -283,7 +286,7 @@ function redrawCanvas(canvas: HTMLCanvasElement, paths: DrawPath[], draft?: Draw
 // ─── Component ────────────────────────────────────────────────────────────────
 interface PaintCanvasProps {
   onClose: () => void;
-  initialAction?: "area" | "full";
+  initialAction?: "area" | "full" | "fullpage";
   onScreenshotModeChange?: (active: boolean) => void;
 }
 
@@ -308,17 +311,19 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
   const [screenshotStart, setScreenshotStart] = useState<{ x: number, y: number } | null>(null);
   const [screenshotCurrent, setScreenshotCurrent] = useState<{ x: number, y: number } | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null); // To show confirmation modal
+  const [isCapturingFullPage, setIsCapturingFullPage] = useState(false);
+  const [fullPageProgress, setFullPageProgress] = useState(0);
 
   useEffect(() => {
     if (onScreenshotModeChange) {
-      onScreenshotModeChange(isTakingScreenshot || previewDataUrl !== null);
+      onScreenshotModeChange(isTakingScreenshot || previewDataUrl !== null || isCapturingFullPage);
     }
     return () => {
       if (onScreenshotModeChange) {
         onScreenshotModeChange(false);
       }
     };
-  }, [isTakingScreenshot, previewDataUrl, onScreenshotModeChange]);
+  }, [isTakingScreenshot, previewDataUrl, isCapturingFullPage, onScreenshotModeChange]);
 
   // Text input state
   const [pendingText, setPendingText] = useState<{ x: number; y: number } | null>(null);
@@ -367,6 +372,12 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
         setIsTakingScreenshot(false);
         setTool("select");
         captureRegion(0, 0, window.innerWidth, window.innerHeight);
+      }, 100);
+    } else if (initialAction === "fullpage") {
+      setTimeout(() => {
+        setIsTakingScreenshot(false);
+        setTool("select");
+        captureFullPage();
       }, 100);
     }
   }, [initialAction]);
@@ -468,26 +479,22 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
   const captureRegion = async (x: number, y: number, w: number, h: number) => {
     if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
 
-      // Temporarily hide UI elements before capturing
-      let paintToolbar: HTMLElement | null = null;
-      let mainToolbar: HTMLElement | null = null;
-      const rootNode = canvasRef.current?.getRootNode() as ShadowRoot | Document;
+      // Temporarily hide the extension container so zero extension elements/bars are captured
+      const extensionRoot = document.getElementById("accessibility-inspector-extension-root");
+      if (extensionRoot) extensionRoot.style.visibility = "hidden";
 
-      if (rootNode) {
-        paintToolbar = rootNode.querySelector("#paint-toolbar") as HTMLElement;
-        mainToolbar = rootNode.querySelector("#main-extension-menu") as HTMLElement;
-      }
-
-      if (paintToolbar) (paintToolbar as HTMLElement).style.display = "none";
-      if (mainToolbar) (mainToolbar as HTMLElement).style.display = "none";
-
-      // Give time for browser to apply display:none and clear visual flashes
-      await new Promise(resolve => setTimeout(resolve, 80));
+      // Force double rAF + timeout to ensure compositor frame is rendered cleanly without extension UI
+      await new Promise(res => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTimeout(res, 50);
+          });
+        });
+      });
 
       chrome.runtime.sendMessage({ action: "capture-tab" }, (response) => {
-        // Restore UI immediately after capture is taken
-        if (paintToolbar) (paintToolbar as HTMLElement).style.display = "flex";
-        if (mainToolbar) (mainToolbar as HTMLElement).style.display = "flex";
+        // Restore extension UI immediately after capture is taken
+        if (extensionRoot) extensionRoot.style.visibility = "visible";
 
         if (response && response.dataUrl) {
           const img = new Image();
@@ -605,6 +612,195 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
     captureRegion(0, 0, window.innerWidth, window.innerHeight);
   };
 
+  const captureFullPage = async () => {
+    if (!chrome?.runtime?.sendMessage) return;
+
+    setIsCapturingFullPage(true);
+    setFullPageProgress(0);
+
+    let paintToolbar: HTMLElement | null = null;
+    let mainToolbar: HTMLElement | null = null;
+    let floatingPanel: HTMLElement | null = null;
+    const rootNode = canvasRef.current?.getRootNode() as ShadowRoot | Document;
+
+    if (rootNode) {
+      paintToolbar = rootNode.querySelector("#paint-toolbar") as HTMLElement;
+      mainToolbar = rootNode.querySelector("#main-extension-menu") as HTMLElement;
+      floatingPanel = rootNode.querySelector("#floating-panel-container") as HTMLElement;
+    }
+
+    if (paintToolbar) paintToolbar.style.display = "none";
+    if (mainToolbar) mainToolbar.style.display = "none";
+    if (floatingPanel) floatingPanel.style.display = "none";
+
+    const originalOverflow = document.documentElement.style.overflow;
+    const startX = window.scrollX;
+    const startY = window.scrollY;
+
+    const body = document.body;
+    const html = document.documentElement;
+
+    const fullWidth = Math.max(
+      body ? body.scrollWidth : 0,
+      body ? body.offsetWidth : 0,
+      html.clientWidth,
+      html.scrollWidth,
+      html.offsetWidth
+    );
+    const fullHeight = Math.max(
+      body ? body.scrollHeight : 0,
+      body ? body.offsetHeight : 0,
+      html.clientHeight,
+      html.scrollHeight,
+      html.offsetHeight
+    );
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = fullWidth * dpr;
+    canvas.height = fullHeight * dpr;
+    const ctx = canvas.getContext("2d");
+
+    if (!ctx) {
+      if (paintToolbar) paintToolbar.style.display = "flex";
+      if (mainToolbar) mainToolbar.style.display = "flex";
+      if (floatingPanel) floatingPanel.style.display = "block";
+      setIsCapturingFullPage(false);
+      return;
+    }
+
+    const fixedElements: { el: HTMLElement; origVis: string }[] = [];
+    try {
+      const allEls = document.querySelectorAll<HTMLElement>("*");
+      allEls.forEach(el => {
+        if (el.closest("#accessibility-inspector-extension-root")) return;
+        const compStyle = window.getComputedStyle(el);
+        if (compStyle.position === "fixed") {
+          fixedElements.push({ el, origVis: el.style.visibility });
+        } else if (compStyle.position === "sticky") {
+          const rect = el.getBoundingClientRect();
+          const docTop = rect.top + window.scrollY;
+          // Only hide sticky elements if they are top-of-page headers (docTop < 150px)
+          if (docTop < 150) {
+            fixedElements.push({ el, origVis: el.style.visibility });
+          }
+        }
+      });
+    } catch (e) {
+      console.warn("Error finding fixed elements:", e);
+    }
+
+    const numYSteps = Math.ceil(fullHeight / viewportHeight);
+    const numXSteps = Math.ceil(fullWidth / viewportWidth);
+    const totalSteps = numYSteps * numXSteps;
+    let currentStep = 0;
+
+    try {
+      for (let yIdx = 0; yIdx < numYSteps; yIdx++) {
+        const targetY = yIdx === numYSteps - 1
+          ? Math.max(0, fullHeight - viewportHeight)
+          : yIdx * viewportHeight;
+
+        if (yIdx > 0) {
+          fixedElements.forEach(({ el }) => {
+            el.style.visibility = "hidden";
+          });
+        }
+
+        for (let xIdx = 0; xIdx < numXSteps; xIdx++) {
+          const targetX = xIdx === numXSteps - 1
+            ? Math.max(0, fullWidth - viewportWidth)
+            : xIdx * viewportWidth;
+
+          window.scrollTo(targetX, targetY);
+          
+          // Wait 650ms to allow scroll animations, CSS transitions, lazy loading, and reflows to settle completely
+          await new Promise(res => setTimeout(res, 650));
+
+          const actualScrollX = window.scrollX;
+          const actualScrollY = window.scrollY;
+
+          // Temporarily hide progress banner & extension UI before taking tab capture
+          const extensionRoot = document.getElementById("accessibility-inspector-extension-root");
+          if (extensionRoot) extensionRoot.style.visibility = "hidden";
+
+          await new Promise(res => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                setTimeout(res, 50);
+              });
+            });
+          });
+
+          const captureResponse = await new Promise<{ dataUrl?: string }>(res => {
+            chrome.runtime.sendMessage({ action: "capture-tab" }, resp => {
+              res(resp || {});
+            });
+          });
+
+          // Restore extension UI immediately after tab capture
+          if (extensionRoot) extensionRoot.style.visibility = "visible";
+
+          if (captureResponse.dataUrl) {
+            await new Promise<void>(resImg => {
+              const img = new Image();
+              img.onload = () => {
+                ctx.drawImage(
+                  img,
+                  0,
+                  0,
+                  img.width,
+                  img.height,
+                  actualScrollX * dpr,
+                  actualScrollY * dpr,
+                  viewportWidth * dpr,
+                  viewportHeight * dpr
+                );
+                resImg();
+              };
+              img.onerror = () => resImg();
+              img.src = captureResponse.dataUrl!;
+            });
+          }
+
+          currentStep++;
+          setFullPageProgress(Math.round((currentStep / totalSteps) * 100));
+        }
+      }
+    } catch (err) {
+      console.error("Full page screenshot error:", err);
+    } finally {
+      fixedElements.forEach(({ el, origVis }) => {
+        el.style.visibility = origVis;
+      });
+
+      window.scrollTo(startX, startY);
+      document.documentElement.style.overflow = originalOverflow;
+
+      if (paintToolbar) paintToolbar.style.display = "flex";
+      if (mainToolbar) mainToolbar.style.display = "flex";
+      if (floatingPanel) floatingPanel.style.display = "block";
+
+      setIsCapturingFullPage(false);
+
+      const paintCanvas = canvasRef.current;
+      if (paintCanvas && paths.length > 0) {
+        ctx.drawImage(paintCanvas, 0, startY * dpr, viewportWidth * dpr, viewportHeight * dpr);
+      }
+
+      setPreviewDataUrl(canvas.toDataURL("image/png", 1.0));
+    }
+  };
+
+  const takeFullPageScreenshot = () => {
+    setIsTakingScreenshot(false);
+    setTool("select");
+    captureFullPage();
+  };
+
   const handlePreviewClose = () => {
     setPreviewDataUrl(null);
     if (initialAction) onClose();
@@ -612,8 +808,30 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
 
   const downloadPreview = () => {
     if (!previewDataUrl) return;
+
+    let baseName = document.title.trim();
+    if (!baseName) {
+      baseName = window.location.hostname || "screenshot";
+    }
+
+    const sanitized = baseName
+      .replace(/[/\\?%*:|"<>]/g, "")
+      .replace(/\s+/g, "_")
+      .slice(0, 60);
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const hours = String(now.getHours()).padStart(2, "0");
+    const minutes = String(now.getMinutes()).padStart(2, "0");
+    const seconds = String(now.getSeconds()).padStart(2, "0");
+
+    const dateStamp = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+    const fileName = `${sanitized || "screenshot"}_${dateStamp}.png`;
+
     const link = document.createElement("a");
-    link.download = `screenshot-${new Date().getTime()}.png`;
+    link.download = fileName;
     link.href = previewDataUrl;
     link.click();
     handlePreviewClose();
@@ -627,11 +845,115 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
       await navigator.clipboard.write([
         new ClipboardItem({ "image/png": blob })
       ]);
-      alert("Image copied to clipboard!");
       handlePreviewClose();
     } catch (err) {
       console.error("Failed to copy image", err);
-      alert("Failed to copy image. Your browser might not support this feature.");
+    }
+  };
+
+  const exportPdf = async () => {
+    if (!previewDataUrl) return;
+
+    try {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+        img.src = previewDataUrl;
+      });
+
+      const width = img.width;
+      const height = img.height;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0);
+
+      const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const base64Data = jpegDataUrl.split(",")[1];
+      const jpegBytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+
+      const ptWidth = Math.round(width * 0.75);
+      const ptHeight = Math.round(height * 0.75);
+
+      const encoder = new TextEncoder();
+
+      const header = `%PDF-1.4\n%\xFF\xFF\xFF\xFF\n`;
+      const obj1 = `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`;
+      const obj2 = `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n`;
+      const obj3 = `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${ptWidth} ${ptHeight}] /Resources << /XObject << /I1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n`;
+      
+      const streamContent = `q ${ptWidth} 0 0 ${ptHeight} 0 0 cm /I1 Do Q\n`;
+      const obj4 = `4 0 obj\n<< /Length ${streamContent.length} >>\nstream\n${streamContent}endstream\nendobj\n`;
+      
+      const obj5Header = `5 0 obj\n<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`;
+      const obj5Footer = `\nendstream\nendobj\n`;
+
+      const parts: Uint8Array[] = [
+        encoder.encode(header),
+        encoder.encode(obj1),
+        encoder.encode(obj2),
+        encoder.encode(obj3),
+        encoder.encode(obj4),
+        encoder.encode(obj5Header),
+        jpegBytes,
+        encoder.encode(obj5Footer)
+      ];
+
+      let currentOffset = header.length;
+      const offsets = [0];
+      
+      offsets.push(currentOffset);
+      currentOffset += obj1.length;
+      
+      offsets.push(currentOffset);
+      currentOffset += obj2.length;
+      
+      offsets.push(currentOffset);
+      currentOffset += obj3.length;
+      
+      offsets.push(currentOffset);
+      currentOffset += obj4.length;
+      
+      offsets.push(currentOffset);
+      currentOffset += obj5Header.length + jpegBytes.length + obj5Footer.length;
+
+      const xrefOffset = currentOffset;
+
+      let xref = `xref\n0 6\n0000000000 65535 f \n`;
+      for (let i = 1; i <= 5; i++) {
+        xref += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
+      }
+
+      const trailer = `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+      parts.push(encoder.encode(xref));
+      parts.push(encoder.encode(trailer));
+
+      const pdfBlob = new Blob(parts, { type: "application/pdf" });
+      
+      let baseName = document.title.trim() || window.location.hostname || "screenshot";
+      const sanitized = baseName.replace(/[/\\?%*:|"<>]/g, "").replace(/\s+/g, "_").slice(0, 60);
+      const now = new Date();
+      const dateStamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}-${String(now.getSeconds()).padStart(2, "0")}`;
+      const fileName = `${sanitized || "screenshot"}_${dateStamp}.pdf`;
+
+      const blobUrl = URL.createObjectURL(pdfBlob);
+      const link = document.createElement("a");
+      link.download = fileName;
+      link.href = blobUrl;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+
+      handlePreviewClose();
+    } catch (err) {
+      console.error("Failed to export PDF:", err);
     }
   };
 
@@ -704,35 +1026,43 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
       {/* Screenshot Preview Modal */}
       {previewDataUrl && (
         <div id="paint-screenshot-preview" style={{
-          position: "fixed", inset: 0, zIndex: 2000000, backgroundColor: "rgba(15, 23, 42, 0.8)",
-          display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "all"
+          position: "fixed", inset: 0, zIndex: 2147483647, backgroundColor: "rgba(15, 23, 42, 0.88)",
+          backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "all",
+          padding: "24px", boxSizing: "border-box"
         }}>
           <div style={{
             position: "relative",
             display: "flex", flexDirection: "column", alignItems: "center", gap: "16px",
-            maxWidth: "90vw", maxHeight: "90vh"
+            maxWidth: "92vw", maxHeight: "92vh"
           }}>
             <img src={previewDataUrl} alt="Screenshot Preview" style={{
-              maxWidth: "100%", maxHeight: "calc(90vh - 80px)",
-              objectFit: "contain", borderRadius: "8px", boxShadow: "0 20px 40px rgba(0,0,0,0.3)"
+              maxWidth: "100%", maxHeight: "calc(88vh - 70px)",
+              objectFit: "contain", borderRadius: "12px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.6)",
+              border: "1px solid rgba(255,255,255,0.12)"
             }} />
 
             <div style={{
-              display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", borderRadius: "12px",
-              backgroundColor: "#1e293b", boxShadow: "0 10px 25px rgba(0,0,0,0.4)"
+              display: "flex", alignItems: "center", gap: "10px", padding: "10px 16px", borderRadius: "16px",
+              backgroundColor: "rgba(30, 41, 59, 0.95)", border: "1px solid rgba(255,255,255,0.15)",
+              boxShadow: "0 20px 30px -10px rgba(0,0,0,0.5)"
             }}>
-              <button onClick={downloadPreview} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", borderRadius: "8px", border: "none", background: "transparent", color: "#e2e8f0", cursor: "pointer", transition: "background 0.2s" }} title="Download">
-                <Download size={18} strokeWidth={2} />
-                <span style={{ fontSize: "13px", fontWeight: "500", fontFamily: "Inter, sans-serif" }}>Download</span>
+              <button onClick={downloadPreview} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px", borderRadius: "10px", border: "none", background: "linear-gradient(135deg, #10b981, #059669)", color: "#ffffff", cursor: "pointer", transition: "all 0.15s ease", fontWeight: "600" }} title="Download PNG Image">
+                <Download size={18} strokeWidth={2.2} />
+                <span style={{ fontSize: "13px", fontFamily: "sans-serif" }}>PNG</span>
               </button>
-              <button onClick={copyPreview} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", borderRadius: "8px", border: "none", background: "transparent", color: "#e2e8f0", cursor: "pointer", transition: "background 0.2s" }} title="Copy">
+              <button onClick={exportPdf} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px", borderRadius: "10px", border: "none", background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "#ffffff", cursor: "pointer", transition: "all 0.15s ease", fontWeight: "600" }} title="Export as PDF Document">
+                <FileText size={18} strokeWidth={2.2} />
+                <span style={{ fontSize: "13px", fontFamily: "sans-serif" }}>PDF</span>
+              </button>
+              <button onClick={copyPreview} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px", borderRadius: "10px", border: "none", background: "rgba(51, 65, 85, 0.8)", color: "#f8fafc", cursor: "pointer", transition: "all 0.15s ease", fontWeight: "500" }} title="Copy to Clipboard">
                 <Copy size={18} strokeWidth={2} />
-                <span style={{ fontSize: "13px", fontWeight: "500", fontFamily: "Inter, sans-serif" }}>Copy</span>
+                <span style={{ fontSize: "13px", fontFamily: "sans-serif" }}>Copy</span>
               </button>
-              <div style={{ width: "1px", height: "24px", backgroundColor: "#334155", margin: "0 4px" }} />
-              <button onClick={handlePreviewClose} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", borderRadius: "8px", border: "none", background: "transparent", color: "#f87171", cursor: "pointer", transition: "background 0.2s" }} title="Close">
-                <X size={20} strokeWidth={2.5} />
-                <span style={{ fontSize: "13px", fontWeight: "600", fontFamily: "Inter, sans-serif" }}>Close</span>
+              <div style={{ width: "1px", height: "24px", backgroundColor: "rgba(255,255,255,0.15)", margin: "0 4px" }} />
+              <button onClick={handlePreviewClose} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px", borderRadius: "10px", border: "none", background: "rgba(239, 68, 68, 0.15)", color: "#f87171", cursor: "pointer", transition: "all 0.15s ease", fontWeight: "600" }} title="Close Preview">
+                <X size={18} strokeWidth={2.5} />
+                <span style={{ fontSize: "13px", fontFamily: "sans-serif" }}>Close</span>
               </button>
             </div>
           </div>
@@ -808,15 +1138,53 @@ export const PaintCanvas: React.FC<PaintCanvasProps> = ({ onClose, initialAction
 
           <div style={{ height: "1px", background: "#f1f5f9", margin: "0 -16px" }} />
 
-          <div style={{ display: "flex", justifyContent: "center", gap: "16px", alignItems: "center", padding: "0 4px" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: "12px", alignItems: "center", padding: "0 4px" }}>
             <button onClick={clearAll} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", transition: "color 0.2s" }} title="Clear All"><Trash2 size={16} strokeWidth={1.5} /></button>
-            <button onClick={startScreenshotRegion} style={{ background: "none", border: "none", color: isTakingScreenshot ? "#a855f7" : "#64748b", cursor: "pointer", transition: "color 0.2s" }} title="Screenshot Region"><Camera size={16} strokeWidth={1.5} /></button>
-            <button onClick={takeFullScreenShot} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", transition: "color 0.2s" }} title="Full Screen Screenshot"><Monitor size={16} strokeWidth={1.5} /></button>
+            <button onClick={startScreenshotRegion} style={{ background: "none", border: "none", color: isTakingScreenshot ? "#a855f7" : "#64748b", cursor: "pointer", transition: "color 0.2s" }} title="Area Screenshot"><Camera size={16} strokeWidth={1.5} /></button>
+            <button onClick={takeFullScreenShot} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", transition: "color 0.2s" }} title="Visible Viewport Screenshot"><Monitor size={16} strokeWidth={1.5} /></button>
+            <button onClick={takeFullPageScreenshot} style={{ background: "none", border: "none", color: isCapturingFullPage ? "#10b981" : "#64748b", cursor: "pointer", transition: "color 0.2s" }} title="Full Page Screenshot"><FileDown size={16} strokeWidth={1.5} /></button>
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 12px" }}>
             <button onClick={undo} disabled={!paths.length} style={{ background: "none", border: "none", color: paths.length ? "#64748b" : "#cbd5e1", cursor: paths.length ? "pointer" : "not-allowed", transition: "color 0.2s" }} title="Undo"><Undo2 size={18} strokeWidth={1.5} /></button>
             <button onClick={redo} disabled={!redoStack.length} style={{ background: "none", border: "none", color: redoStack.length ? "#64748b" : "#cbd5e1", cursor: redoStack.length ? "pointer" : "not-allowed", transition: "color 0.2s" }} title="Redo"><Redo2 size={18} strokeWidth={1.5} /></button>
+          </div>
+        </div>
+      )}
+
+      {/* Full Page Screenshot Progress Banner */}
+      {isCapturingFullPage && (
+        <div
+          id="full-page-progress-banner"
+          style={{
+            position: "fixed",
+            top: "24px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 2147483647,
+            background: "rgba(15, 23, 42, 0.95)",
+            backdropFilter: "blur(12px)",
+            border: "1px solid rgba(16, 185, 129, 0.4)",
+            color: "#ffffff",
+            padding: "12px 24px",
+            borderRadius: "14px",
+            boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            gap: "14px",
+            fontFamily: "sans-serif",
+            pointerEvents: "none"
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "24px", height: "24px" }}>
+            <Loader2 className="animate-spin text-emerald-400" size={22} />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            <span style={{ fontSize: "13px", fontWeight: "700", letterSpacing: "0.02em", color: "#f8fafc" }}>Capturing Full Page...</span>
+            <span style={{ fontSize: "11px", color: "#94a3b8" }}>Stitching document tiles... {fullPageProgress}%</span>
+          </div>
+          <div style={{ width: "90px", height: "6px", background: "#1e293b", borderRadius: "3px", overflow: "hidden", marginLeft: "6px" }}>
+            <div style={{ width: `${fullPageProgress}%`, height: "100%", background: "linear-gradient(90deg, #10b981, #3b82f6)", transition: "width 0.15s ease-out" }} />
           </div>
         </div>
       )}

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import { InspectorOverlay } from "./InspectorOverlay";
 import { FloatingPanel } from "./FloatingPanel";
 import { PaintCanvas } from "./PaintCanvas";
+import { RulerMarginOverlay } from "./RulerMarginOverlay";
 import { ElementStyles, extractElementStyles, parseColor } from "./styleExtractor";
 import {
   MousePointer,
@@ -9,7 +10,7 @@ import {
   Palette,
   Image as ImageIcon,
   Layout,
-  Power,
+  Power,  
   Pipette,
   X,
   Copy,
@@ -18,7 +19,9 @@ import {
   PenTool,
   Camera,
   Monitor,
-  GripVertical
+  FileDown,
+  GripVertical,
+  Ruler
 } from "lucide-react";
 
 const isTextElement = (el: HTMLElement): boolean => {
@@ -175,15 +178,16 @@ export const ContentApp: React.FC = () => {
   const [inspectorActive, setInspectorActive] = useState(false);
   const [isEyedropperActive, setIsEyedropperActive] = useState(false);
   const [paintActive, setPaintActive] = useState(false);
-  const [paintInitialAction, setPaintInitialAction] = useState<"area" | "full" | undefined>(undefined);
+  const [paintInitialAction, setPaintInitialAction] = useState<"area" | "full" | "fullpage" | undefined>(undefined);
   const [isScreenshotActive, setIsScreenshotActive] = useState(false);
   const [gridInspectorActive, setGridInspectorActive] = useState(false);
+  const [marginInspectorActive, setMarginInspectorActive] = useState(false);
   const [showGridHoverBox, setShowGridHoverBox] = useState(true);
   const [hoveredElement, setHoveredElement] = useState<HTMLElement | null>(null);
   const [lockedItems, setLockedItems] = useState<{ element: HTMLElement; styles: ElementStyles }[]>([]);
   const [focusedTab, setFocusedTab] = useState<"inspect" | "colors" | "fonts" | "images">("inspect");
   const [showContrastTooltips, setShowContrastTooltips] = useState(false);
-  const [activeOverlayModes, setActiveOverlayModes] = useState<Set<"fontSize" | "fontWeight" | "fontFamily" | "contrast">>(new Set());
+  const [activeOverlayModes, setActiveOverlayModes] = useState<Set<"fontSize" | "fontWeight" | "fontFamily" | "lineHeight" | "tracking" | "textColor" | "contrast">>(new Set());
   const [fullPageTooltips, setFullPageTooltips] = useState<{
     id: string;
     top: number;
@@ -374,6 +378,27 @@ export const ContentApp: React.FC = () => {
         setIsOpen(true);
         setFocusedTab("images");
         sendResponse({ status: "images-opened" });
+      } else if (action === "trigger-fullpage-screenshot") {
+        setPaintInitialAction("fullpage");
+        setPaintActive(true);
+        setInspectorActive(false);
+        setGridInspectorActive(false);
+        setTextInspectorActive(false);
+        sendResponse({ status: "fullpage-triggered" });
+      } else if (action === "trigger-viewport-screenshot") {
+        setPaintInitialAction("full");
+        setPaintActive(true);
+        setInspectorActive(false);
+        setGridInspectorActive(false);
+        setTextInspectorActive(false);
+        sendResponse({ status: "viewport-triggered" });
+      } else if (action === "trigger-area-screenshot") {
+        setPaintInitialAction("area");
+        setPaintActive(true);
+        setInspectorActive(false);
+        setGridInspectorActive(false);
+        setTextInspectorActive(false);
+        sendResponse({ status: "area-triggered" });
       } else if (action === "toggle-sidebar") {
         const nextOpen = !isOpen;
         setIsOpen(nextOpen);
@@ -829,6 +854,9 @@ export const ContentApp: React.FC = () => {
     fontSize: { bgColor: () => "#1e3a8a", getValue: s => s.fontSize },
     fontWeight: { bgColor: () => "#3730a3", getValue: s => s.fontWeight },
     fontFamily: { bgColor: () => "#4c1d95", getValue: s => { const v = s.fontFamilyChain[0] || s.fontFamily; return v.length > 15 ? v.substring(0, 12) + "..." : v; } },
+    lineHeight: { bgColor: () => "#9a3412", getValue: s => s.lineHeight === "normal" ? "normal" : s.lineHeight },
+    tracking: { bgColor: () => "#701a75", getValue: s => s.letterSpacing === "normal" ? "0px" : s.letterSpacing },
+    textColor: { bgColor: () => "#0f766e", getValue: s => s.color },
     contrast: {
       bgColor: s => {
         const isLargeText = parseFloat(s.fontSize) >= 24 || (parseFloat(s.fontSize) >= 18.6 && parseInt(s.fontWeight, 10) >= 700);
@@ -1011,6 +1039,7 @@ export const ContentApp: React.FC = () => {
       setInspectorActive(false);
       setGridInspectorActive(false);
       setTextInspectorActive(false);
+      setMarginInspectorActive(false);
       setLockedItems([]);
       setHoveredElement(null);
       setHoveredTextElement(null);
@@ -1043,6 +1072,9 @@ export const ContentApp: React.FC = () => {
 
           {/* Paint / Annotation Canvas */}
           {paintActive && <PaintCanvas onClose={() => { setPaintActive(false); setPaintInitialAction(undefined); setIsScreenshotActive(false); }} initialAction={paintInitialAction} onScreenshotModeChange={setIsScreenshotActive} />}
+
+          {/* Margin & Ruler Canvas Overlay */}
+          <RulerMarginOverlay active={marginInspectorActive} onClose={() => setMarginInspectorActive(false)} />
 
           {/* Selected Element Outlines - Persistent if selection locked */}
           {lockedItems.map((item, idx) => (
@@ -1243,7 +1275,7 @@ export const ContentApp: React.FC = () => {
           id="main-extension-menu"
           onMouseDown={startDragMenu}
           style={{
-            display: (isEyedropperActive || isScreenshotActive) ? "none" : "flex",
+            display: (isEyedropperActive || isScreenshotActive || paintActive) ? "none" : "flex",
             position: "fixed",
             left: isMenuPositioned ? `${menuPos.x}px` : '50%',
             bottom: isMenuPositioned ? `${menuPos.y}px` : '24px',
@@ -1340,6 +1372,23 @@ export const ContentApp: React.FC = () => {
                   </div>
 
                   <div
+                    onClick={() => handleCopyField("letterSpacing", activeItem.styles.letterSpacing)}
+                    className="flex justify-between border-b border-slate-900/50 py-1.5 px-1 hover:bg-slate-900/50 rounded cursor-pointer transition-colors group select-all"
+                  >
+                    <span className="text-slate-400 group-hover:text-slate-300">Tracking</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-slate-200">
+                        {copiedField === "letterSpacing" ? "Copied!" : activeItem.styles.letterSpacing}
+                      </span>
+                      {copiedField === "letterSpacing" ? (
+                        <Check className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3 h-3 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      )}
+                    </div>
+                  </div>
+
+                  <div
                     onClick={() => handleCopyField("color", activeItem.styles.color)}
                     className="flex justify-between border-b border-slate-900/50 py-1.5 px-1 hover:bg-slate-900/50 rounded cursor-pointer transition-colors group select-all"
                   >
@@ -1419,21 +1468,27 @@ export const ContentApp: React.FC = () => {
 
           {/* Secondary Top Bar for Text Inspector */}
           {textInspectorActive && (
-            <div className="bg-slate-950/95 backdrop-blur-md border border-slate-800 p-2.5 rounded-xl shadow-xl w-[500px] pointer-events-auto flex flex-col gap-2">
+            <div className="bg-slate-950/95 backdrop-blur-md border border-slate-800 p-2.5 rounded-xl shadow-xl w-auto min-w-[560px] max-w-[780px] pointer-events-auto flex flex-col gap-2">
               {/* Row 1: Toggles & Preview */}
               <div className="flex items-center justify-between gap-3">
                 {/* Left: Toggles */}
-                <div className="flex items-center gap-1.5 text-[10px] font-mono">
-                  {(["fontSize", "fontWeight", "fontFamily", "contrast"] as const).map(mode => {
+                <div className="flex items-center gap-1.5 text-[10px] font-mono flex-wrap">
+                  {(["fontSize", "fontWeight", "fontFamily", "lineHeight", "tracking", "textColor", "contrast"] as const).map(mode => {
                     const label = mode === "fontSize" ? "Font Size"
                       : mode === "fontWeight" ? "Font Weight"
                         : mode === "fontFamily" ? "Font Family"
-                          : "Contrast";
+                          : mode === "lineHeight" ? "Line Height"
+                            : mode === "tracking" ? "Tracking"
+                              : mode === "textColor" ? "Text Color"
+                                : "Contrast";
                     const isActive = activeOverlayModes.has(mode);
                     const activeColor = mode === "fontSize" ? "bg-blue-600 border-blue-500"
                       : mode === "fontWeight" ? "bg-indigo-600 border-indigo-500"
                         : mode === "fontFamily" ? "bg-purple-600 border-purple-500"
-                          : "bg-emerald-700 border-emerald-600";
+                          : mode === "lineHeight" ? "bg-orange-600 border-orange-500"
+                            : mode === "tracking" ? "bg-fuchsia-600 border-fuchsia-500"
+                              : mode === "textColor" ? "bg-teal-600 border-teal-500"
+                                : "bg-emerald-700 border-emerald-600";
                     return (
                       <button
                         key={mode}
@@ -1457,10 +1512,10 @@ export const ContentApp: React.FC = () => {
                 </div>
 
                 {/* Divider */}
-                <div className="border-l border-slate-800 h-6" />
+                <div className="w-[1px] h-5 bg-slate-700/80 shrink-0" style={{ width: "1px", height: "20px", backgroundColor: "rgba(255, 255, 255, 0.2)", flexShrink: 0 }} />
 
                 {/* Right: Hover Preview */}
-                <div className="flex items-center justify-end text-[10px] font-mono text-slate-300 truncate max-w-[160px]">
+                <div className="flex items-center justify-end text-[10px] font-mono text-slate-300 truncate max-w-[160px] shrink-0">
                   {hoveredTextStyles ? (
                     <div className="flex items-center gap-1.5 truncate">
                       <span className="text-slate-400 font-semibold">{hoveredTextStyles.fontSize}</span>
@@ -1510,14 +1565,20 @@ export const ContentApp: React.FC = () => {
 
 
           {/* Main Toolbar Pill */}
-          <div className="flex items-center gap-3 bg-slate-950/90 backdrop-blur-md border border-slate-800/80 px-3.5 py-1.5 rounded-xl shadow-2xl pointer-events-auto">
+          <div className="flex items-center gap-2.5 bg-slate-950/90 backdrop-blur-md border border-slate-800/80 px-3.5 py-1.5 rounded-xl shadow-2xl pointer-events-auto">
             {/* Drag Handle */}
-            <div className="flex items-center justify-center text-slate-500 pr-2 border-r border-slate-800 cursor-grab hover:text-slate-300">
+            <div className="flex items-center justify-center text-slate-500 cursor-grab hover:text-slate-300">
               <GripVertical size={20} />
             </div>
 
+            {/* Divider */}
+            <div
+              className="w-[1px] h-5 bg-slate-700/80 shrink-0"
+              style={{ width: "1px", height: "20px", backgroundColor: "rgba(255, 255, 255, 0.2)", flexShrink: 0 }}
+            />
+
             {/* Group 1: Tools */}
-            <div className="flex items-center gap-1.5 pr-2.5 border-r border-slate-800">
+            <div className="flex items-center gap-1.5">
               {/* Mouse Inspector */}
               <button
                 onClick={() => {
@@ -1589,6 +1650,7 @@ export const ContentApp: React.FC = () => {
                 onClick={() => {
                   setTextInspectorActive(!textInspectorActive);
                   setInspectorActive(false);
+                  setMarginInspectorActive(false);
                 }}
                 className={`flex flex-col items-center justify-center w-9 h-9 rounded-md cursor-pointer transition-all ${textInspectorActive
                   ? "bg-blue-600 text-white shadow-md"
@@ -1599,10 +1661,34 @@ export const ContentApp: React.FC = () => {
                 <Type className="w-3.5 h-3.5" />
                 <span className={`text-[8px] font-bold font-mono mt-0.5 ${textInspectorActive ? "text-blue-200" : "text-slate-500"}`}>T</span>
               </button>
+
+              {/* Margin & Ruler Inspector Toggle */}
+              <button
+                onClick={() => {
+                  setMarginInspectorActive(!marginInspectorActive);
+                  setInspectorActive(false);
+                  setGridInspectorActive(false);
+                  setTextInspectorActive(false);
+                }}
+                className={`flex flex-col items-center justify-center w-9 h-9 rounded-md cursor-pointer transition-all ${marginInspectorActive
+                  ? "bg-cyan-600 text-white shadow-md"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+                  }`}
+                title="Margin & Ruler Guides (Key: R)"
+              >
+                <Ruler className="w-3.5 h-3.5" />
+                <span className={`text-[8px] font-bold font-mono mt-0.5 ${marginInspectorActive ? "text-cyan-200" : "text-slate-500"}`}>R</span>
+              </button>
             </div>
 
+            {/* Divider */}
+            <div
+              className="w-[1px] h-5 bg-slate-700/80 shrink-0"
+              style={{ width: "1px", height: "20px", backgroundColor: "rgba(255, 255, 255, 0.2)", flexShrink: 0 }}
+            />
+
             {/* Paint / Annotate & Screenshot Tools */}
-            <div className="flex items-center gap-1.5 px-1 pr-2.5 border-r border-slate-800">
+            <div className="flex items-center gap-1.5">
               <button
                 onClick={() => {
                   setPaintActive(prev => !prev);
@@ -1629,7 +1715,10 @@ export const ContentApp: React.FC = () => {
                   setGridInspectorActive(false);
                   setTextInspectorActive(false);
                 }}
-                className="flex flex-col items-center justify-center w-9 h-9 rounded-md cursor-pointer transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+                className={`flex flex-col items-center justify-center w-9 h-9 rounded-md cursor-pointer transition-all ${paintActive && paintInitialAction === "area"
+                  ? "bg-purple-600 text-white shadow-md"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+                  }`}
                 title="Area Screenshot"
               >
                 <Camera className="w-3.5 h-3.5" />
@@ -1644,16 +1733,43 @@ export const ContentApp: React.FC = () => {
                   setGridInspectorActive(false);
                   setTextInspectorActive(false);
                 }}
-                className="flex flex-col items-center justify-center w-9 h-9 rounded-md cursor-pointer transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-900"
-                title="Full Screen Screenshot"
+                className={`flex flex-col items-center justify-center w-9 h-9 rounded-md cursor-pointer transition-all ${paintActive && paintInitialAction === "full"
+                  ? "bg-blue-600 text-white shadow-md"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+                  }`}
+                title="Visible Viewport Screenshot"
               >
                 <Monitor className="w-3.5 h-3.5" />
-                <span className="text-[8px] font-bold font-mono mt-0.5 text-slate-500">F</span>
+                <span className="text-[8px] font-bold font-mono mt-0.5 text-slate-500">V</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setPaintInitialAction("fullpage");
+                  setPaintActive(true);
+                  setInspectorActive(false);
+                  setGridInspectorActive(false);
+                  setTextInspectorActive(false);
+                }}
+                className={`flex flex-col items-center justify-center w-9 h-9 rounded-md cursor-pointer transition-all ${paintActive && paintInitialAction === "fullpage"
+                  ? "bg-emerald-600 text-white shadow-md"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+                  }`}
+                title="Full Page Screenshot (Entire Document)"
+              >
+                <FileDown className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-[8px] font-bold font-mono mt-0.5 text-emerald-500">FP</span>
               </button>
             </div>
 
+            {/* Divider */}
+            <div
+              className="w-[1px] h-5 bg-slate-700/80 shrink-0"
+              style={{ width: "1px", height: "20px", backgroundColor: "rgba(255, 255, 255, 0.2)", flexShrink: 0 }}
+            />
+
             {/* Group 2: Sidebar Tabs */}
-            <div className="flex items-center gap-1.5 px-1 pr-2.5 border-r border-slate-800">
+            <div className="flex items-center gap-1.5">
               {/* Colors tab */}
               <button
                 onClick={() => {
@@ -1702,6 +1818,12 @@ export const ContentApp: React.FC = () => {
                 <span className={`text-[8px] font-bold font-mono mt-0.5 ${isOpen && focusedTab === "images" ? "text-blue-300" : "text-slate-500"}`}>G</span>
               </button>
             </div>
+
+            {/* Divider */}
+            <div
+              className="w-[1px] h-5 bg-slate-700/80 shrink-0"
+              style={{ width: "1px", height: "20px", backgroundColor: "rgba(255, 255, 255, 0.2)", flexShrink: 0 }}
+            />
 
             {/* Group 3: Control Buttons */}
             <div className="flex items-center gap-1.5">
