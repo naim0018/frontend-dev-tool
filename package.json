@@ -16,8 +16,8 @@
     "tailwindcss"
   ],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && node vite-build.js",
+    "dev": "node api.js && vite",
+    "build": "node api.js && tsc -b && node vite-build.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
